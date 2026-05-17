@@ -235,15 +235,21 @@ export default function App() {
                               <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
                               <span className="text-[8px] md:text-[11px] font-black uppercase text-slate-400">{isOnline ? 'System Online' : 'Core Offline'}</span>
                            </div>
-                           <button onClick={() => setShowIpEdit(!showIpEdit)} className="flex items-center gap-2 px-4 py-1 bg-blue-600/10 hover:bg-blue-600/20 rounded-full text-blue-400 text-[9px] md:text-[12px] font-mono transition-all border border-blue-500/20">
-                              <Globe size={12} /> {espIp}
-                           </button>
+                           {profile.role === 'admin' ? (
+                              <button onClick={() => setShowIpEdit(!showIpEdit)} className="flex items-center gap-2 px-4 py-1 bg-blue-600/10 hover:bg-blue-600/20 rounded-full text-blue-400 text-[9px] md:text-[12px] font-mono transition-all border border-blue-500/20">
+                                 <Globe size={12} /> {espIp}
+                              </button>
+                           ) : (
+                              <div className="flex items-center gap-2 px-4 py-1 bg-slate-800/80 rounded-full text-slate-500 text-[9px] md:text-[12px] font-mono border border-slate-700/50">
+                                 <Globe size={12} className="text-slate-600" /> {espIp}
+                              </div>
+                           )}
                         </div>
                      </div>
                   </div>
 
                   <AnimatePresence>
-                     {showIpEdit && (
+                     {showIpEdit && profile.role === 'admin' && (
                         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="flex gap-2">
                            <input type="text" className="bg-slate-900/80 border border-white/10 rounded-2xl px-6 py-3 text-[12px] font-mono text-white outline-none focus:border-blue-500" value={espIp} onChange={e => { setEspIp(e.target.value); localStorage.setItem('esp_ip', e.target.value); }} />
                            <button onClick={() => setShowIpEdit(false)} className="bg-blue-600 p-3 rounded-2xl text-white shadow-xl hover:scale-110 active:scale-90 transition-all"><Save size={20} /></button>
