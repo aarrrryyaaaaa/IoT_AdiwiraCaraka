@@ -57,6 +57,9 @@ export default function App() {
   const [user, setUser] = React.useState(null);
   const [profile, setProfile] = React.useState({ role: 'pengunjung', avatar_url: null });
   const [showLogin, setShowLogin] = React.useState(false);
+  const [authMode, setAuthMode] = React.useState('login'); 
+  const [role, setRole] = React.useState('anggota'); 
+  const [secretKey, setSecretKey] = React.useState('');
   const [testStatus, setTestStatus] = React.useState({});
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
@@ -290,22 +293,87 @@ export default function App() {
         </div>
       </div>
 
-      {/* LOGIN MODAL */}
+      {/* LOGIN & REGISTER MODAL */}
       <AnimatePresence>
         {showLogin && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-3xl p-6">
-            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-[#1e293b] p-12 rounded-[4rem] w-full max-w-sm border border-white/10 shadow-2xl relative">
-              <button onClick={() => setShowLogin(false)} className="absolute top-10 right-10 text-slate-500 hover:text-white"><X /></button>
+            <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} className="bg-[#1e293b] p-8 md:p-12 rounded-[3.5rem] md:rounded-[4rem] w-full max-w-sm border border-white/10 shadow-2xl relative">
+              <button onClick={() => { setShowLogin(false); setAuthMode('login'); }} className="absolute top-8 right-8 text-slate-500 hover:text-white"><X /></button>
+              
+              {/* Auth Tabs */}
+              <div className="flex bg-slate-900/80 p-1.5 rounded-2xl border border-white/5 mb-8">
+                 <button onClick={() => setAuthMode('login')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all ${authMode === 'login' ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                    Sign In
+                 </button>
+                 <button onClick={() => setAuthMode('register')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all ${authMode === 'register' ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                    Register
+                 </button>
+              </div>
+
               <form onSubmit={async (e) => {
                 e.preventDefault();
-                const { data } = await supabase.from('profiles').select('*').eq('email', email).eq('password', password).single();
-                if (data) { setUser(data); setProfile(data); localStorage.setItem('caraka_user', JSON.stringify(data)); setShowLogin(false); if(data.role==='admin') fetchAllUsers(); }
-                else alert("Authentication Denied.");
-              }} className="space-y-6 pt-6 text-center">
-                <h2 className="text-3xl font-black uppercase text-white mb-8 tracking-tighter italic">ADIWIRA <span className="text-orange-500">GATEWAY</span></h2>
-                <input type="email" placeholder="Identity" className="w-full bg-slate-900/80 p-6 rounded-2xl text-white outline-none border border-white/10 shadow-inner" value={email} onChange={e => setEmail(e.target.value)} required />
-                <input type="password" placeholder="Token" className="w-full bg-slate-900/80 p-6 rounded-2xl text-white outline-none border border-white/10 shadow-inner" value={password} onChange={e => setPassword(e.target.value)} required />
-                <button className="w-full py-6 bg-orange-600 text-white font-black rounded-2xl shadow-xl uppercase tracking-[0.2em]">Authorize</button>
+                if (authMode === 'login') {
+                  const { data } = await supabase.from('profiles').select('*').eq('email', email).eq('password', password).single();
+                  if (data) { 
+                    setUser(data); 
+                    setProfile(data); 
+                    localStorage.setItem('caraka_user', JSON.stringify(data)); 
+                    setShowLogin(false); 
+                    if(data.role==='admin') fetchAllUsers(); 
+                  }
+                  else alert("Authentication Denied. Periksa Email & Password Anda.");
+                } else {
+                  // Register mode
+                  const expectedKey = role === 'admin' ? import.meta.env.VITE_KEY_ADMIN : import.meta.env.VITE_KEY_ANGGOTA;
+                  if (secretKey !== expectedKey) {
+                    alert("Kunci Rahasia (Token) yang Anda masukkan salah!");
+                    return;
+                  }
+                  // Check if email already registered
+                  const { data: existing } = await supabase.from('profiles').select('email').eq('email', email).maybeSingle();
+                  if (existing) {
+                     alert("Email ini sudah terdaftar!");
+                     return;
+                  }
+                  // Register new user
+                  const { error } = await supabase.from('profiles').insert([
+                     { email, password, role, avatar_url: null }
+                  ]);
+                  if (error) {
+                     alert("Registrasi Gagal: " + error.message);
+                  } else {
+                     alert("Registrasi Berhasil! Silakan Masuk.");
+                     setAuthMode('login');
+                     setSecretKey('');
+                  }
+                }
+              }} className="space-y-4 text-center">
+                <h2 className="text-xl md:text-2xl font-black uppercase text-white mb-4 tracking-tighter italic">
+                   ADIWIRA <span className="text-orange-500">{authMode === 'login' ? 'GATEWAY' : 'SIGN UP'}</span>
+                </h2>
+                
+                <input type="email" placeholder="Identity (Email)" className="w-full bg-slate-900/80 p-4 rounded-2xl text-white outline-none border border-white/10 shadow-inner text-xs" value={email} onChange={e => setEmail(e.target.value)} required />
+                <input type="password" placeholder="Token (Password)" className="w-full bg-slate-900/80 p-4 rounded-2xl text-white outline-none border border-white/10 shadow-inner text-xs" value={password} onChange={e => setPassword(e.target.value)} required />
+                
+                {authMode === 'register' && (
+                   <div className="space-y-4 text-left animate-fadeIn">
+                      <div className="space-y-2">
+                         <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest ml-1">Access Level</label>
+                         <div className="flex bg-slate-900/50 p-1.5 rounded-xl border border-white/5 gap-2">
+                            <button type="button" onClick={() => setRole('anggota')} className={`flex-1 py-2 text-[8px] font-bold uppercase rounded-lg transition-all ${role === 'anggota' ? 'bg-blue-600/30 text-blue-400 border border-blue-500/20' : 'text-slate-500'}`}>Anggota</button>
+                            <button type="button" onClick={() => setRole('admin')} className={`flex-1 py-2 text-[8px] font-bold uppercase rounded-lg transition-all ${role === 'admin' ? 'bg-orange-600/30 text-orange-400 border border-orange-500/20' : 'text-slate-500'}`}>Admin</button>
+                         </div>
+                      </div>
+                      <div className="space-y-2">
+                         <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest ml-1">Registration Key</label>
+                         <input type="password" placeholder="Secret Key" className="w-full bg-slate-900/80 p-4 rounded-2xl text-white outline-none border border-white/10 shadow-inner text-xs" value={secretKey} onChange={e => setSecretKey(e.target.value)} required />
+                      </div>
+                   </div>
+                )}
+
+                <button className="w-full py-4 bg-orange-600 hover:bg-orange-500 text-white font-black rounded-2xl shadow-xl uppercase tracking-[0.2em] transition-all hover:scale-[1.02]">
+                   {authMode === 'login' ? 'Authorize' : 'Register Account'}
+                </button>
               </form>
             </motion.div>
           </motion.div>
