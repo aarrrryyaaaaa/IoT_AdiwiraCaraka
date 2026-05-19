@@ -433,9 +433,9 @@ export default function App() {
       restoreSession();
       fetchLogs();
       
-      // Polling real-time super cepat 400ms untuk menghilangkan delay
+      // Polling real-time yang aman untuk ESP32 (setiap 2000ms, selaras dengan interval pembacaan DHT22)
       fetchStatus();
-      const interval = setInterval(fetchStatus, 400);
+      const interval = setInterval(fetchStatus, 2000);
 
       // Session expiry checker — update sisa waktu sesi setiap 60 detik
       const sessionChecker = setInterval(async () => {
