@@ -4,6 +4,7 @@ import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement
 import { Line } from 'react-chartjs-2';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from './lib/supabase';
+import { hashPassword, verifyPassword, createSessionToken, loadSession, saveSession, clearSession, isSessionValid, getSessionTimeRemaining } from './lib/auth';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend, Filler);
 
@@ -293,6 +294,7 @@ export default function App() {
    const wateringStartTime = React.useRef(null);
    const isTestingPump = React.useRef(false);
    const [currentTime, setCurrentTime] = React.useState(new Date());
+   const [sessionMinutes, setSessionMinutes] = React.useState(0);
 
    React.useEffect(() => {
       const timer = setInterval(() => {
@@ -404,18 +406,52 @@ export default function App() {
       } catch (e) { setIsOnline(false); }
    }, [espIp]);
 
+   // Session restoration via JWT — memuat sesi yang tersimpan dan memvalidasi expiry
    React.useEffect(() => {
-      const saved = localStorage.getItem('caraka_user');
-      if (saved) {
-         const p = JSON.parse(saved); setUser(p); setProfile(p);
-         if (p.role === 'admin') fetchAllUsers();
-      }
+      const restoreSession = async () => {
+         const session = await loadSession();
+         if (session) {
+            // Sesi JWT masih valid — restore user state dari database
+            const { data: userProfile } = await supabase.from('profiles').select('*').eq('id', parseInt(session.sub)).limit(1);
+            if (userProfile && userProfile.length > 0) {
+               const p = userProfile[0];
+               setUser(p);
+               setProfile(p);
+               if (p.role === 'admin') fetchAllUsers();
+            }
+            const remaining = await getSessionTimeRemaining();
+            setSessionMinutes(remaining);
+         } else {
+            // Fallback: cek format localStorage lama untuk migrasi
+            const saved = localStorage.getItem('caraka_user');
+            if (saved) {
+               // Bersihkan format lama — user harus login ulang dengan sistem baru
+               localStorage.removeItem('caraka_user');
+            }
+         }
+      };
+      restoreSession();
       fetchLogs();
       
       // Polling real-time super cepat 400ms untuk menghilangkan delay
       fetchStatus();
       const interval = setInterval(fetchStatus, 400);
-      return () => clearInterval(interval);
+
+      // Session expiry checker — update sisa waktu sesi setiap 60 detik
+      const sessionChecker = setInterval(async () => {
+         const valid = await isSessionValid();
+         if (!valid && user) {
+            clearSession();
+            setUser(null);
+            setProfile({ role: 'pengunjung', avatar_url: null });
+            alert('Sesi Anda telah berakhir setelah 8 jam. Silakan login kembali.');
+         } else {
+            const remaining = await getSessionTimeRemaining();
+            setSessionMinutes(remaining);
+         }
+      }, 60000);
+
+      return () => { clearInterval(interval); clearInterval(sessionChecker); };
    }, [espIp, fetchStatus]);
 
    const fetchLogs = async () => {
@@ -564,7 +600,7 @@ export default function App() {
                                  <Settings size={14} />
                               </button>
                               <button 
-                                 onClick={() => { localStorage.removeItem('caraka_user'); window.location.reload(); }} 
+                                 onClick={() => { clearSession(); window.location.reload(); }} 
                                  className="p-2 md:p-3 bg-slate-900/80 hover:bg-orange-600 text-slate-400 hover:text-white rounded-full transition-all"
                                  title="Logout"
                               >
@@ -1086,7 +1122,7 @@ export default function App() {
                         <form onSubmit={async (e) => {
                            e.preventDefault();
                            if (authMode === 'login') {
-                              // Login logic using parsed username comparison
+                              // === SECURE LOGIN: bcrypt verify + JWT session ===
                               const { data: allProfiles, error } = await supabase.from('profiles').select('*');
                               if (error) {
                                  alert("Database connection failure!");
@@ -1094,22 +1130,53 @@ export default function App() {
                               }
                               const matched = allProfiles.find(u => {
                                  const parsed = parseUserEmail(u.email);
-                                 return parsed.username.toLowerCase() === username.trim().toLowerCase() && u.password === password;
+                                 return parsed.username.toLowerCase() === username.trim().toLowerCase();
                               });
 
-                              if (matched) {
+                              if (!matched) {
+                                 alert("Username tidak ditemukan!");
+                                 return;
+                              }
+
+                              let isAuthenticated = false;
+
+                              // Cek apakah akun sudah migrasi ke bcrypt (punya password_hash)
+                              if (matched.password_hash) {
+                                 isAuthenticated = await verifyPassword(password, matched.password_hash);
+                              } else if (matched.password && matched.password === password) {
+                                 // MIGRASI OTOMATIS: Akun lama dengan plaintext password
+                                 isAuthenticated = true;
+                                 const newHash = await hashPassword(password);
+                                 await supabase.from('profiles').update({ 
+                                    password_hash: newHash, 
+                                    password: null 
+                                 }).eq('id', matched.id);
+                                 console.log('Akun berhasil dimigrasi ke bcrypt hash.');
+                              }
+
+                              if (isAuthenticated) {
+                                 const parsed = parseUserEmail(matched.email);
+                                 const token = await createSessionToken({
+                                    id: matched.id,
+                                    username: parsed.username,
+                                    fullname: parsed.fullname,
+                                    role: matched.role,
+                                    avatar_url: matched.avatar_url
+                                 });
+                                 saveSession(token);
+                                 const remaining = await getSessionTimeRemaining();
+                                 setSessionMinutes(remaining);
                                  setUser(matched);
                                  setProfile(matched);
-                                 localStorage.setItem('caraka_user', JSON.stringify(matched));
                                  setShowLogin(false);
                                  setUsername('');
                                  setPassword('');
                                  if (matched.role === 'admin') fetchAllUsers();
                               } else {
-                                 alert("Autentikasi Gagal! Periksa kembali Username & Password Anda.");
+                                 alert("Password salah! Periksa kembali Password Anda.");
                               }
                            } else {
-                              // Register logic using composite email
+                              // === SECURE REGISTER: bcrypt hash + composite email ===
                               const expectedKey = role === 'admin' ? import.meta.env.VITE_KEY_ADMIN : import.meta.env.VITE_KEY_ANGGOTA;
                               if (secretKey !== expectedKey) {
                                  alert("Kunci Rahasia yang Anda masukkan salah!");
@@ -1128,8 +1195,9 @@ export default function App() {
                               }
 
                               const composite = formatUserEmail(username, fullname);
+                              const hashedPw = await hashPassword(password);
                               const { error } = await supabase.from('profiles').insert([
-                                 { email: composite, password, role, avatar_url: null }
+                                 { email: composite, password: null, password_hash: hashedPw, role, avatar_url: null }
                               ]);
 
                               if (error) {
@@ -1220,7 +1288,8 @@ export default function App() {
                            };
                            
                            if (newPassword) {
-                              updateData.password = newPassword;
+                              updateData.password_hash = await hashPassword(newPassword);
+                              updateData.password = null;
                            }
 
                            const { error } = await supabase.from('profiles').update(updateData).eq('id', user.id);
@@ -1231,12 +1300,20 @@ export default function App() {
                               const updatedUser = { 
                                  ...user, 
                                  email: composite, 
-                                 password: newPassword || user.password, 
                                  avatar_url: avatarBase64 
                               };
                               setUser(updatedUser);
                               setProfile(updatedUser);
-                              localStorage.setItem('caraka_user', JSON.stringify(updatedUser));
+                              // Buat JWT token baru dengan data profil terbaru
+                              const parsed = parseUserEmail(composite);
+                              const newToken = await createSessionToken({
+                                 id: user.id,
+                                 username: parsed.username,
+                                 fullname: parsed.fullname,
+                                 role: user.role,
+                                 avatar_url: avatarBase64
+                              });
+                              saveSession(newToken);
                               setShowProfileModal(false);
                               setNewPassword('');
                               setConfirmPassword('');

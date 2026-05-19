@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 const rawUrl = import.meta.env.VITE_SUPABASE_URL;
 const rawKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// 🛡️ AUTO-SANITIZE URL (Membersihkan spasi, tanda kutip, dan garis miring di akhir)
+//  AUTO-SANITIZE URL (Membersihkan spasi, tanda kutip, dan garis miring di akhir)
 const cleanUrl = rawUrl?.trim().replace(/\/$/, "").replace(/['"]/g, "");
 const cleanKey = rawKey?.trim().replace(/['"]/g, "");
 
