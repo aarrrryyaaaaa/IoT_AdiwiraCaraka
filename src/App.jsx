@@ -522,7 +522,7 @@ export default function App() {
          </div>
 
          <div className="min-h-screen text-slate-100 p-3 md:p-8 font-sans selection:bg-purple-500/30 relative z-10">
-            <div className="max-w-[1400px] mx-auto space-y-6 md:space-y-10 relative">
+            <div className="max-w-[1400px] mx-auto space-y-6 md:space-y-6 relative">
 
                {/* ROW 1: HEADER */}
                 <header className="flex flex-col md:flex-row justify-between items-center gap-6 bg-black/30 backdrop-blur-[80px] p-6 md:p-10 rounded-[2.5rem] md:rounded-[4rem] border border-white/10 shadow-2xl relative overflow-hidden w-full">
