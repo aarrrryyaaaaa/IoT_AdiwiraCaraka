@@ -275,10 +275,6 @@ export default function App() {
    const wateringStartTime = React.useRef(null);
    const isTestingPump = React.useRef(false);
    
-   // Leader Election Referensi
-   const syncClientId = React.useRef(Math.random().toString(36).substring(2, 15));
-   const pendingLogRef = React.useRef(null);
-   
    const [currentTime, setCurrentTime] = React.useState(new Date());
    const [sessionMinutes, setSessionMinutes] = React.useState(0);
 
@@ -332,23 +328,9 @@ export default function App() {
          console.log('Connected to HiveMQ WSS Broker');
          setIsMqttConnected(true);
          client.subscribe('adiwira/v3/telemetry');
-         client.subscribe('adiwira/v3/react_sync');
       });
 
-      client.on('message', (topic, message) => {
-         if (topic === 'adiwira/v3/react_sync') {
-            try {
-               const syncData = JSON.parse(message.toString());
-               // Jika ada browser lain nge-klaim dengan ID lebih besar, kita mengalah (yield)
-               if (syncData.action === 'claim_log' && pendingLogRef.current) {
-                  if (syncData.id > syncClientId.current) {
-                     pendingLogRef.current.active = false;
-                  }
-               }
-            } catch(e){}
-            return;
-         }
-
+      client.on('message', async (topic, message) => {
          if (topic === 'adiwira/v3/telemetry') {
             setIsEspOnline(true);
             if (espTimeoutRef.current) clearTimeout(espTimeoutRef.current);
@@ -373,55 +355,27 @@ export default function App() {
                         const durationSeconds = Math.round((new Date() - startTime) / 1000);
                         const baseTemp = data.temp || 0;
 
-                        // --- MQTT LEADER ELECTION ---
-                        // Memasukkan log ke state antrean
-                        pendingLogRef.current = {
-                           active: true,
-                           startTime: startTime,
-                           duration: durationSeconds,
-                           temp: baseTemp
-                        };
-                        
-                        // Teriak ke semua browser yang sedang terbuka
-                        if (mqttClientRef.current) {
-                           mqttClientRef.current.publish('adiwira/v3/react_sync', JSON.stringify({
-                              action: 'claim_log',
-                              id: syncClientId.current,
-                              ts: Date.now()
-                           }));
+                        // --- SOLUSI DATABASE-LEVEL: UNIQUE CONSTRAINT PADA start_time_bucket ---
+                        // Bulatkan waktu ke kelipatan 30 detik → menjadi kunci unik di DB
+                        // Semua browser yang mencoba insert di bucket waktu yang sama akan ditolak DB secara otomatis
+                        const bucketEpoch = Math.floor(startTime.getTime() / 1000 / 30) * 30;
+
+                        const { error } = await supabase.from('watering_logs').insert([{ 
+                           start_time: startTime.toISOString(), 
+                           duration_seconds: durationSeconds, 
+                           temperature: baseTemp,
+                           start_time_bucket: bucketEpoch
+                        }]);
+
+                        if (!error) {
+                           console.log('✅ Log penyiraman berhasil dicatat.');
+                           fetchLogs();
+                        } else if (error.code === '23505') {
+                           // Unique constraint violation = browser lain sudah insert duluan. Abaikan.
+                           console.log('♻️ [DB Unique Lock] Log untuk siklus ini sudah ada. Duplikasi dicegah oleh database.');
+                        } else {
+                           console.error('Database Insert Error:', error);
                         }
-
-                        // Beri waktu 3 detik bagi semua browser untuk berdebat siapa Leadernya
-                        setTimeout(async () => {
-                           if (pendingLogRef.current && pendingLogRef.current.active) {
-                              
-                              // --- DOUBLE SAFETY: CEK SUPABASE ---
-                              // Jika ESP32 berkedip (flapping) atau jaringan delay, pastikan belum ada log di 30 detik terakhir
-                              const { data: latestLog } = await supabase.from('watering_logs').select('start_time').order('start_time', { ascending: false }).limit(1);
-                              
-                              if (latestLog && latestLog.length > 0) {
-                                 const lastLogTime = new Date(latestLog[0].start_time);
-                                 if (Math.abs(startTime - lastLogTime) < 30000) {
-                                    console.log("♻️ [Supabase Lock] Log penyiraman dalam 30 detik terakhir sudah ada. Membatalkan insert (Anti-Flapping & Deduplikasi).");
-                                    pendingLogRef.current = null;
-                                    return; // Lewati insert sepenuhnya
-                                 }
-                              }
-
-                              console.log("🏆 Leader Election dimenangkan oleh browser ini. Mengirim data ke Supabase...");
-                              const { error } = await supabase.from('watering_logs').insert([{ 
-                                 start_time: pendingLogRef.current.startTime.toISOString(), 
-                                 duration_seconds: pendingLogRef.current.duration, 
-                                 temperature: pendingLogRef.current.temp 
-                              }]);
-                              
-                              if (!error) fetchLogs();
-                              else console.error("Database Insert Error:", error);
-                           } else {
-                              console.log("♻️ Browser lain menjadi Leader. Membatalkan log duplikat...");
-                           }
-                           pendingLogRef.current = null;
-                        }, 3000);
                      }
                   }
                }
