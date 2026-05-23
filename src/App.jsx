@@ -44,7 +44,7 @@ function DiagnosticBtn({ label, icon, onClick, status, color = "orange" }) {
    return (
       <button 
          onClick={onClick} 
-         className={`relative py-3 md:py-5 bg-black/30 backdrop-blur-[80px] border border-white/10 ${
+         className={`relative py-3 md:py-5 bg-gradient-to-br from-white/[0.08] to-transparent backdrop-blur-[40px] backdrop-saturate-[180%] border-white/[0.15] shadow-[0_8px_32px_0_rgba(0,0,0,0.3)] ${
             color === 'orange' ? 'border-orange-500/20 hover:bg-orange-600' : 'border-blue-500/20 hover:bg-blue-600'
          } rounded-xl md:rounded-2xl flex flex-col items-center gap-1.5 md:gap-2 hover:text-white transition-all hover:scale-105 active:scale-95 group shadow-xl`}
       >
@@ -355,15 +355,30 @@ client.on('message', (topic, message) => {
                         const durationSeconds = Math.round((new Date() - startTime) / 1000);
                         const baseTemp = data.temp || 0;
 
-                        // Lakukan Insert ke Supabase
-                        supabase.from('watering_logs').insert([{ 
-                           start_time: startTime.toISOString(), 
-                           duration_seconds: durationSeconds, 
-                           temperature: baseTemp 
-                        }]).then(({ error }) => {
+                        // JITTER DELAY: Mencegah Duplikasi Log jika banyak user membuka aplikasi bersamaan
+                        const jitterDelay = Math.floor(Math.random() * 2000); // 0 hingga 2 detik
+                        setTimeout(async () => {
+                           // Cek apakah ada perangkat/user lain yang sudah memasukkan log dalam 30 detik terakhir
+                           const { data: latestLog } = await supabase.from('watering_logs').select('start_time').order('start_time', { ascending: false }).limit(1);
+                           
+                           if (latestLog && latestLog.length > 0) {
+                              const lastLogTime = new Date(latestLog[0].start_time);
+                              if (Math.abs(startTime - lastLogTime) < 30000) {
+                                 console.log("Siklus siram ini sudah dicatat oleh perangkat lain. Melewati (Deduplikasi).");
+                                 return; // Lewati insert
+                              }
+                           }
+
+                           // Lakukan Insert ke Supabase
+                           const { error } = await supabase.from('watering_logs').insert([{ 
+                              start_time: startTime.toISOString(), 
+                              duration_seconds: durationSeconds, 
+                              temperature: baseTemp 
+                           }]);
+                           
                            if (!error) fetchLogs();
                            else console.error("Database Insert Error:", error);
-                        });
+                        }, jitterDelay);
                      }
                   }
                }
@@ -479,9 +494,9 @@ client.on('message', (topic, message) => {
             <div className="max-w-[1400px] mx-auto space-y-6 md:space-y-6 relative">
 
                {/* ----------------- BAGIAN HEADER ----------------- */}
-                <header className="flex flex-col md:flex-row justify-between items-center gap-6 bg-black/30 backdrop-blur-[80px] p-6 md:p-8 rounded-[2.5rem] md:rounded-[4rem] border border-white/10 shadow-2xl relative overflow-hidden w-full">
-                  <div className="flex flex-col gap-3 items-center md:items-start text-center md:text-left flex-1 w-full">
-                     <h1 className="text-2xl md:text-4xl font-black italic uppercase tracking-tighter bg-gradient-to-r from-blue-400 via-purple-500 to-orange-500 bg-clip-text text-transparent filter drop-shadow-[0_0_20px_rgba(249,115,22,0.25)] select-none">
+                <header className="flex flex-col md:flex-row items-center justify-between gap-4 md:gap-6 bg-gradient-to-br from-white/[0.08] to-transparent backdrop-blur-[40px] backdrop-saturate-[180%] border border-white/[0.15] shadow-[0_8px_32px_0_rgba(0,0,0,0.3)] p-4 md:p-8 rounded-[2rem] md:rounded-[4rem] relative overflow-hidden w-full">
+                  <div className="flex flex-col gap-2 md:gap-3 items-center md:items-start text-center md:text-left flex-1 w-full md:w-auto">
+                     <h1 className="text-xl md:text-4xl font-black italic uppercase tracking-tighter bg-gradient-to-r from-blue-400 via-purple-500 to-orange-500 bg-clip-text text-transparent filter drop-shadow-[0_0_20px_rgba(249,115,22,0.25)] select-none">
                         Adiwira Caraka
                      </h1>
                      <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
@@ -498,25 +513,25 @@ client.on('message', (topic, message) => {
                      </div>
                   </div>
 
-                  <div className="flex flex-col items-center justify-center flex-1 shrink-0 w-full">
-                     <div className="text-sm md:text-xl font-semibold text-white/90 drop-shadow-md tracking-wider">
+                  {/* Premium Complete Digital Clock (iOS Style) - CENTERED */}
+                  <div className="flex flex-col items-center justify-center my-0 md:my-1 flex-shrink-0">
+                     <div className="text-xs md:text-xl font-semibold text-white/90 drop-shadow-md tracking-wider">
                         {currentTime.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
                      </div>
-                     <div className="text-6xl md:text-[6rem] font-bold tracking-tighter leading-none text-white drop-shadow-[0_4px_20px_rgba(255,255,255,0.3)] flex items-baseline gap-1 md:gap-2 my-2" style={{ fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', fontVariantNumeric: 'tabular-nums' }}>
-                        {currentTime.getHours().toString().padStart(2, '0')}:
-                        {currentTime.getMinutes().toString().padStart(2, '0')}
-                        <span className="text-3xl md:text-[3.5rem] text-white/70 font-medium">
+                     <div className="text-[3.5rem] md:text-[6rem] font-bold tracking-tighter leading-none text-white drop-shadow-[0_4px_20px_rgba(255,255,255,0.3)] flex items-baseline gap-0 md:gap-2 my-1 md:my-2" style={{ fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', fontVariantNumeric: 'tabular-nums' }}>
+                        {currentTime.getHours().toString().padStart(2, '0')}:{currentTime.getMinutes().toString().padStart(2, '0')}
+                        <span className="text-2xl md:text-[3.5rem] text-white/70 font-medium">
                            :{currentTime.getSeconds().toString().padStart(2, '0')}
                         </span>
                      </div>
                   </div>
 
-                  <div className="flex items-center justify-center md:justify-end gap-4 flex-1 w-full">
-                     <div className="flex items-center gap-4 bg-slate-950/40 p-2 md:p-3 rounded-full border border-white/5 shadow-inner backdrop-blur-md">
+                  <div className="flex items-center justify-center md:justify-end gap-3 md:gap-4 flex-1 w-full md:w-auto">
+                     <div className="flex items-center gap-2 md:gap-4 bg-slate-950/40 p-1.5 md:p-3 rounded-full border border-white/5 shadow-inner backdrop-blur-md">
                         {user ? (
                            <>
                               <div className="relative group shrink-0">
-                                 <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-slate-900 border border-orange-500/30 flex items-center justify-center overflow-hidden shadow-2xl transition-all group-hover:border-orange-500 relative">
+                                 <div className="w-8 h-8 md:w-12 md:h-12 rounded-full bg-slate-900 border border-orange-500/30 flex items-center justify-center overflow-hidden shadow-2xl transition-all group-hover:border-orange-500 relative">
                                     {profile.avatar_url ? (
                                        <img src={profile.avatar_url} className="w-full h-full object-cover" />
                                     ) : (
@@ -592,7 +607,7 @@ client.on('message', (topic, message) => {
                <div className="grid grid-cols-3 gap-3 md:gap-10">
                   
                   {/* Kartu Suhu */}
-                  <div className={`relative overflow-hidden rounded-2xl md:rounded-[2.5rem] p-3 md:p-8 bg-black/30 backdrop-blur-[80px] border border-white/10 shadow-none transition-all hover:scale-[1.03] group ${status.temp > status.tempMax || status.temp < status.tempMin ? 'border-red-500/50 shadow-[0_0_35px_rgba(239,68,68,0.2)]' : ''}`}>
+                  <div className={`relative overflow-hidden rounded-2xl md:rounded-[2.5rem] p-3 md:p-8 bg-gradient-to-br from-white/[0.08] to-transparent backdrop-blur-[40px] backdrop-saturate-[180%] border-white/[0.15] shadow-[0_8px_32px_0_rgba(0,0,0,0.3)] transition-all hover:scale-[1.03] group ${status.temp > status.tempMax || status.temp < status.tempMin ? 'border-red-500/50 shadow-[0_0_35px_rgba(239,68,68,0.2)]' : ''}`}>
                      <div className="absolute -top-10 -right-10 w-32 h-32 bg-orange-500/10 blur-[50px] rounded-full group-hover:bg-orange-500/20 transition-all" />
                      <div className="flex justify-between items-start mb-2 md:mb-6 relative z-10">
                         <div className="p-1.5 md:p-4 rounded-xl md:rounded-2xl bg-orange-500/10 border border-orange-500/20 text-orange-500 group-hover:scale-110 transition-all shadow-inner">
@@ -630,7 +645,7 @@ client.on('message', (topic, message) => {
                   </div>
 
                   {/* Kartu Kelembapan */}
-                  <div className={`relative overflow-hidden rounded-2xl md:rounded-[2.5rem] p-3 md:p-8 bg-black/30 backdrop-blur-[80px] border border-white/10 shadow-none transition-all hover:scale-[1.03] group ${status.hum < status.humMin ? 'border-yellow-500/50 shadow-[0_0_35px_rgba(234,179,8,0.2)]' : ''}`}>
+                  <div className={`relative overflow-hidden rounded-2xl md:rounded-[2.5rem] p-3 md:p-8 bg-gradient-to-br from-white/[0.08] to-transparent backdrop-blur-[40px] backdrop-saturate-[180%] border-white/[0.15] shadow-[0_8px_32px_0_rgba(0,0,0,0.3)] transition-all hover:scale-[1.03] group ${status.hum < status.humMin ? 'border-yellow-500/50 shadow-[0_0_35px_rgba(234,179,8,0.2)]' : ''}`}>
                      <div className="absolute -top-10 -right-10 w-32 h-32 bg-blue-500/10 blur-[50px] rounded-full group-hover:bg-blue-500/20 transition-all" />
                      <div className="flex justify-between items-start mb-2 md:mb-6 relative z-10">
                         <div className="p-1.5 md:p-4 rounded-xl md:rounded-2xl bg-blue-500/10 border border-blue-500/20 text-blue-400 group-hover:scale-110 transition-all shadow-inner">
@@ -703,64 +718,47 @@ client.on('message', (topic, message) => {
                </div>
 
                {/* ----------------- BAGIAN GRAFIK ----------------- */}
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-10">
-                  <div className="bg-black/30 backdrop-blur-[80px] p-6 md:p-8 rounded-[3rem] border border-white/10 shadow-none h-[220px] md:h-[320px] transition-all hover:border-orange-500/20">
+               <div className="grid grid-cols-1 gap-6 md:gap-10">
+                  <div className="bg-gradient-to-br from-white/[0.08] to-transparent backdrop-blur-[40px] backdrop-saturate-[180%] p-6 md:p-8 rounded-[3rem] border border-white/[0.15] shadow-[0_8px_32px_0_rgba(0,0,0,0.3)] h-[250px] md:h-[350px] transition-all hover:border-white/30">
                      <h3 className="text-[8px] md:text-[11px] font-black text-white/60 uppercase tracking-widest mb-4 flex items-center gap-3">
-                        <BarChart3 size={16} className="text-orange-500" /> Temp Wave
+                        <BarChart3 size={16} className="text-white/80" /> Suhu & Kelembapan
                      </h3>
-                     <div className="h-[140px] md:h-[220px]">
+                     <div className="h-[170px] md:h-[250px]">
                         <Line 
                            data={{ 
                               labels: history.labels, 
-                              datasets: [{ 
-                                 label: 'T', 
-                                 data: history.temp, 
-                                 borderColor: '#f97316', 
-                                 backgroundColor: 'rgba(249, 115, 22, 0.05)', 
-                                 fill: true, 
-                                 tension: 0.4, 
-                                 pointRadius: 0, 
-                                 borderWidth: 4 
-                              }] 
+                              datasets: [
+                                 { 
+                                    label: 'Suhu (°C)', 
+                                    data: history.temp, 
+                                    borderColor: '#f97316', 
+                                    backgroundColor: 'rgba(249, 115, 22, 0.05)', 
+                                    fill: true, 
+                                    tension: 0.4, 
+                                    pointRadius: 0, 
+                                    borderWidth: 3 
+                                 },
+                                 { 
+                                    label: 'Kelembapan (%)', 
+                                    data: history.hum, 
+                                    borderColor: '#3b82f6', 
+                                    backgroundColor: 'rgba(59, 130, 246, 0.05)', 
+                                    fill: true, 
+                                    tension: 0.4, 
+                                    pointRadius: 0, 
+                                    borderWidth: 3 
+                                 }
+                              ] 
                            }} 
                            options={{ 
                               responsive: true, 
                               maintainAspectRatio: false, 
-                              plugins: { legend: { display: false } }, 
-                              scales: { 
-                                 x: { display: false }, 
-                                 y: { 
-                                    grid: { color: 'rgba(255,255,255,0.03)' }, 
-                                    ticks: { color: '#475569', font: { size: 10 } } 
+                              plugins: { 
+                                 legend: { 
+                                    display: true, 
+                                    labels: { color: 'rgba(255,255,255,0.7)', font: { size: 10 } } 
                                  } 
-                              } 
-                           }} 
-                        />
-                     </div>
-                  </div>
-                  <div className="bg-black/30 backdrop-blur-[80px] p-6 md:p-8 rounded-[3rem] border border-white/10 shadow-none h-[220px] md:h-[320px] transition-all hover:border-blue-500/20">
-                     <h3 className="text-[8px] md:text-[11px] font-black text-white/60 uppercase tracking-widest mb-4 flex items-center gap-3">
-                        <BarChart3 size={16} className="text-blue-500" /> Hum Wave
-                     </h3>
-                     <div className="h-[140px] md:h-[220px]">
-                        <Line 
-                           data={{ 
-                              labels: history.labels, 
-                              datasets: [{ 
-                                 label: 'H', 
-                                 data: history.hum, 
-                                 borderColor: '#3b82f6', 
-                                 backgroundColor: 'rgba(59, 130, 246, 0.05)', 
-                                 fill: true, 
-                                 tension: 0.4, 
-                                 pointRadius: 0, 
-                                 borderWidth: 4 
-                              }] 
-                           }} 
-                           options={{ 
-                              responsive: true, 
-                              maintainAspectRatio: false, 
-                              plugins: { legend: { display: false } }, 
+                              }, 
                               scales: { 
                                  x: { display: false }, 
                                  y: { 
