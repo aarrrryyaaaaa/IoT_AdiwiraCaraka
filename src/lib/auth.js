@@ -1,18 +1,6 @@
-/**
- * auth.js — Caraka Dashboard Trusted Device Authentication
- * 
- * Sistem baru ini tidak menggunakan Supabase atau akun pengguna/email.
- * Melainkan menggunakan sebuah Secret PIN tunggal. Jika pengguna memasukkan
- * PIN yang benar, browser mereka akan ditandai sebagai "Trusted Device"
- * dan disimpan di localStorage.
- */
-
-// Kunci sesi penyimpanan di browser
 const SESSION_KEY = 'caraka_trusted_device';
 
-// PIN Master (Bisa diset di file .env menggunakan VITE_MASTER_PIN)
-// Secara default jika belum ada di .env, gunakan "123456" untuk uji coba
-const MASTER_PIN = import.meta.env.VITE_MASTER_PIN || '123456';
+const MASTER_PIN = import.meta.env.VITE_MASTER_PIN;
 
 /**
  * Memverifikasi PIN dan menyimpan sesi Trusted Device.
