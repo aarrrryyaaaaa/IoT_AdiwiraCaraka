@@ -1,144 +1,47 @@
 /**
- * auth.js — Caraka Dashboard Authentication & Session Engine
+ * auth.js — Caraka Dashboard Trusted Device Authentication
  * 
- * Menyediakan:
- *   - Password hashing (bcrypt, cost factor 10)
- *   - JWT session token (8 jam expiry) 
- *   - Session persistence via localStorage
- *   - Auto-migration helper untuk akun plaintext lama
+ * Sistem baru ini tidak menggunakan Supabase atau akun pengguna/email.
+ * Melainkan menggunakan sebuah Secret PIN tunggal. Jika pengguna memasukkan
+ * PIN yang benar, browser mereka akan ditandai sebagai "Trusted Device"
+ * dan disimpan di localStorage.
  */
-import bcrypt from 'bcryptjs';
-import { SignJWT, jwtVerify } from 'jose';
 
-// ===== KONFIGURASI =====
-const JWT_SECRET_RAW = import.meta.env.VITE_JWT_SECRET || 'caraka_fallback_secret';
-const JWT_SECRET = new TextEncoder().encode(JWT_SECRET_RAW);
-const SESSION_KEY = 'caraka_session_token';
-const SESSION_DURATION_HOURS = 8;
+// Kunci sesi penyimpanan di browser
+const SESSION_KEY = 'caraka_trusted_device';
 
-// ===== PASSWORD HASHING =====
+// PIN Master (Bisa diset di file .env menggunakan VITE_MASTER_PIN)
+// Secara default jika belum ada di .env, gunakan "123456" untuk uji coba
+const MASTER_PIN = import.meta.env.VITE_MASTER_PIN || '123456';
 
 /**
- * Membuat bcrypt hash dari password plaintext.
- * Cost factor 10 — keseimbangan keamanan & kecepatan di browser.
- * @param {string} plainPassword 
- * @returns {Promise<string>} bcrypt hash string
+ * Memverifikasi PIN dan menyimpan sesi Trusted Device.
+ * @param {string} inputPin - PIN yang dimasukkan pengguna
+ * @returns {boolean} true jika berhasil, false jika gagal
  */
-export async function hashPassword(plainPassword) {
-   const salt = await bcrypt.genSalt(10);
-   return bcrypt.hash(plainPassword, salt);
-}
-
-/**
- * Memverifikasi password plaintext terhadap bcrypt hash.
- * @param {string} plainPassword 
- * @param {string} hashedPassword 
- * @returns {Promise<boolean>}
- */
-export async function verifyPassword(plainPassword, hashedPassword) {
-   return bcrypt.compare(plainPassword, hashedPassword);
-}
-
-// ===== JWT SESSION MANAGEMENT =====
-
-/**
- * Membuat JWT token sesi baru yang berlaku selama 8 jam.
- * Payload berisi data profil pengguna (id, username, fullname, role).
- * @param {object} userData - { id, username, fullname, role, avatar_url }
- * @returns {Promise<string>} signed JWT token
- */
-export async function createSessionToken(userData) {
-   return new SignJWT({ 
-      sub: String(userData.id),
-      username: userData.username,
-      fullname: userData.fullname,
-      role: userData.role,
-      avatar_url: userData.avatar_url || null
-   })
-      .setProtectedHeader({ alg: 'HS256' })
-      .setIssuedAt()
-      .setExpirationTime(`${SESSION_DURATION_HOURS}h`)
-      .setIssuer('caraka-dashboard')
-      .sign(JWT_SECRET);
-}
-
-/**
- * Memverifikasi dan mendekode JWT token.
- * Mengembalikan payload jika valid, null jika expired/invalid.
- * @param {string} token 
- * @returns {Promise<object|null>} decoded payload atau null
- */
-export async function verifySessionToken(token) {
-   try {
-      const { payload } = await jwtVerify(token, JWT_SECRET, {
-         issuer: 'caraka-dashboard'
-      });
-      return payload;
-   } catch (err) {
-      // Token expired, invalid signature, atau malformed
-      return null;
+export function loginTrustedDevice(inputPin) {
+   if (inputPin === MASTER_PIN) {
+      // Simpan penanda bahwa perangkat ini dipercaya
+      localStorage.setItem(SESSION_KEY, 'true');
+      return true;
    }
-}
-
-// ===== SESSION PERSISTENCE (localStorage) =====
-
-/**
- * Menyimpan JWT token ke localStorage.
- * @param {string} token
- */
-export function saveSession(token) {
-   localStorage.setItem(SESSION_KEY, token);
+   return false;
 }
 
 /**
- * Membaca dan memverifikasi sesi aktif dari localStorage.
- * Mengembalikan decoded payload jika sesi masih valid.
- * Menghapus token jika sudah expired.
- * @returns {Promise<object|null>} payload atau null
+ * Mengecek apakah perangkat ini adalah Trusted Device.
+ * @returns {boolean}
  */
-export async function loadSession() {
-   const token = localStorage.getItem(SESSION_KEY);
-   if (!token) return null;
-
-   const payload = await verifySessionToken(token);
-   if (!payload) {
-      // Token expired atau invalid — bersihkan
-      clearSession();
-      return null;
-   }
-   return payload;
+export function isTrustedDevice() {
+   return localStorage.getItem(SESSION_KEY) === 'true';
 }
 
 /**
- * Menghapus sesi (logout). 
- * Membersihkan JWT token dan data user lama dari localStorage.
+ * Menghapus akses Trusted Device (Logout).
  */
-export function clearSession() {
+export function clearTrustedDevice() {
    localStorage.removeItem(SESSION_KEY);
-   localStorage.removeItem('caraka_user'); // Bersihkan sisa format lama
-}
-
-/**
- * Mengecek apakah sesi saat ini masih valid (tanpa menghapus jika invalid).
- * Cocok untuk guard check sebelum aksi sensitif.
- * @returns {Promise<boolean>}
- */
-export async function isSessionValid() {
-   const token = localStorage.getItem(SESSION_KEY);
-   if (!token) return false;
-   const payload = await verifySessionToken(token);
-   return payload !== null;
-}
-
-/**
- * Menghitung sisa waktu sesi dalam menit.
- * @returns {Promise<number>} menit tersisa, 0 jika expired/tidak ada sesi
- */
-export async function getSessionTimeRemaining() {
-   const token = localStorage.getItem(SESSION_KEY);
-   if (!token) return 0;
-   const payload = await verifySessionToken(token);
-   if (!payload || !payload.exp) return 0;
-   const remainingMs = (payload.exp * 1000) - Date.now();
-   return Math.max(0, Math.floor(remainingMs / 60000));
+   // Bersihkan sesi lama dari Supabase jika ada sisa
+   localStorage.removeItem('caraka_session_token');
+   localStorage.removeItem('caraka_user');
 }

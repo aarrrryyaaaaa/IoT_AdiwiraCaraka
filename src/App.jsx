@@ -12,11 +12,7 @@ import {
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
 import { motion, AnimatePresence } from 'framer-motion';
-import { supabase } from './lib/supabase';
-import { 
-  hashPassword, verifyPassword, createSessionToken, loadSession, 
-  saveSession, clearSession, isSessionValid, getSessionTimeRemaining 
-} from './lib/auth';
+import { loginTrustedDevice, isTrustedDevice, clearTrustedDevice } from './lib/auth';
 
 ChartJS.register(
   CategoryScale, LinearScale, PointElement, LineElement, 
@@ -243,8 +239,7 @@ export default function App() {
    });
    
    // State Pengguna
-   const [user, setUser] = React.useState(null);
-   const [profile, setProfile] = React.useState({ role: 'pengunjung', avatar_url: null });
+   const [isTrusted, setIsTrusted] = React.useState(false);
    
    // State Hardware
    const [hwStats, setHwStats] = React.useState({
@@ -255,20 +250,8 @@ export default function App() {
    
    // State Auth & Modal
    const [showLogin, setShowLogin] = React.useState(false);
-   const [authMode, setAuthMode] = React.useState('login');
-   const [role, setRole] = React.useState('anggota');
    const [secretKey, setSecretKey] = React.useState('');
    const [testStatus, setTestStatus] = React.useState({});
-   const [username, setUsername] = React.useState('');
-   const [fullname, setFullname] = React.useState('');
-   const [password, setPassword] = React.useState('');
-   
-   const [showProfileModal, setShowProfileModal] = React.useState(false);
-   const [newUsername, setNewUsername] = React.useState('');
-   const [newFullname, setNewFullname] = React.useState('');
-   const [newPassword, setNewPassword] = React.useState('');
-   const [confirmPassword, setConfirmPassword] = React.useState('');
-   const [avatarBase64, setAvatarBase64] = React.useState(null);
 
    // Referensi untuk Logic Pompa
    const lastRelayState = React.useRef(false);
@@ -395,28 +378,30 @@ export default function App() {
                         setTimeout(async () => {
                            if (pendingLogRef.current && pendingLogRef.current.active) {
                               
-                              // --- DOUBLE SAFETY: CEK SUPABASE ---
-                              // Jika ESP32 berkedip (flapping) atau jaringan delay, pastikan belum ada log di 30 detik terakhir
-                              const { data: latestLog } = await supabase.from('watering_logs').select('start_time').order('start_time', { ascending: false }).limit(1);
-                              
-                              if (latestLog && latestLog.length > 0) {
-                                 const lastLogTime = new Date(latestLog[0].start_time);
-                                 if (Math.abs(startTime - lastLogTime) < 30000) {
-                                    console.log("♻️ [Supabase Lock] Log penyiraman dalam 30 detik terakhir sudah ada. Membatalkan insert (Anti-Flapping & Deduplikasi).");
-                                    pendingLogRef.current = null;
-                                    return; // Lewati insert sepenuhnya
-                                 }
+                              // --- DOUBLE SAFETY: ANTI-FLAPPING ---
+                              const nowMs = Date.now();
+                              const lastMs = parseInt(localStorage.getItem('last_log_ms') || '0', 10);
+                              if (Math.abs(nowMs - lastMs) < 30000) {
+                                 console.log("♻️ [Safety Lock] Log penyiraman dalam 30 detik terakhir sudah ada. Membatalkan insert.");
+                                 pendingLogRef.current = null;
+                                 return;
                               }
-
-                              console.log("🏆 Leader Election dimenangkan oleh browser ini. Mengirim data ke Supabase...");
-                              const { error } = await supabase.from('watering_logs').insert([{ 
-                                 start_time: pendingLogRef.current.startTime.toISOString(), 
-                                 duration_seconds: pendingLogRef.current.duration, 
-                                 temperature: pendingLogRef.current.temp 
-                              }]);
+                              localStorage.setItem('last_log_ms', nowMs.toString());
                               
-                              if (!error) fetchLogs();
-                              else console.error("Database Insert Error:", error);
+                              console.log("🏆 Leader Election dimenangkan oleh browser ini. Mengirim data ke Google Sheets API...");
+                              const scriptUrl = import.meta.env.VITE_GOOGLE_SHEETS_API_URL;
+                              if (scriptUrl) {
+                                 fetch(scriptUrl, {
+                                    method: 'POST',
+                                    mode: 'no-cors',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                       start_time: pendingLogRef.current.startTime.toISOString(),
+                                       duration_seconds: pendingLogRef.current.duration,
+                                       temperature: pendingLogRef.current.temp
+                                    })
+                                 }).then(() => { setTimeout(fetchLogs, 2000); }).catch(e => console.error(e));
+                              }
                            } else {
                               console.log("♻️ Browser lain menjadi Leader. Membatalkan log duplikat...");
                            }
@@ -451,74 +436,30 @@ export default function App() {
       };
    }, []);
 
+   // Fungsi Fetch Logs
+   async function fetchLogs() {
+      const scriptUrl = import.meta.env.VITE_GOOGLE_SHEETS_API_URL;
+      if (!scriptUrl) return;
+      try {
+         const res = await fetch(scriptUrl);
+         const json = await res.json();
+         if (json && json.data) {
+             setWateringLogs(json.data.slice(0, 20)); // Ambil 20 terbaru
+         }
+      } catch (e) { console.error("Error fetching logs:", e); }
+   }
+
    // Effect: Mengelola Sesi Pengguna
    React.useEffect(() => {
-      const restoreSession = async () => {
-         const session = await loadSession();
-         if (session) {
-            const { data: userProfile } = await supabase.from('profiles').select('*').eq('id', session.sub).limit(1);
-            if (userProfile && userProfile.length > 0) {
-               const p = userProfile[0];
-               setUser(p); 
-               setProfile(p);
-               if (p.role === 'admin') fetchAllUsers();
-            }
-            const remaining = await getSessionTimeRemaining();
-            setSessionMinutes(remaining);
-         } else {
-            const saved = localStorage.getItem('caraka_user');
-            if (saved) localStorage.removeItem('caraka_user');
-         }
-      };
-      
-      restoreSession();
+      setIsTrusted(isTrustedDevice());
       fetchLogs();
-
-      const sessionChecker = setInterval(async () => {
-         const valid = await isSessionValid();
-         if (!valid && user) {
-            clearSession(); 
-            setUser(null); 
-            setProfile({ role: 'pengunjung', avatar_url: null });
-            alert('Sesi Anda telah berakhir setelah 8 jam. Silakan login kembali.');
-         } else {
-            const remaining = await getSessionTimeRemaining(); 
-            setSessionMinutes(remaining);
-         }
-      }, 60000);
-      
-      return () => { clearInterval(sessionChecker); };
-   }, [user]);
-
-   // Mengambil Log Penyiraman
-   const fetchLogs = async () => {
-      const { data } = await supabase
-         .from('watering_logs')
-         .select('*')
-         .order('start_time', { ascending: false })
-         .limit(20);
-      setWateringLogs(data || []);
-   };
-
-   // Mengambil Data Semua User
-   const fetchAllUsers = async () => {
-      const { data } = await supabase.from('profiles').select('*');
-      setAllUsers(data || []);
-   };
-
-   // Fungsi Hapus User
-   const deleteUser = async (id) => {
-      if (!confirm("Hapus user ini?")) return;
-      await supabase.from('profiles').delete().eq('id', id); 
-      fetchAllUsers();
-   };
+   }, []);
 
    // Fungsi Hapus Log
    const deleteLog = async (id) => {
-      if (!confirm("Hapus log penyiraman ini?")) return;
-      await supabase.from('watering_logs').delete().eq('id', id); 
-      fetchLogs();
+      if (!confirm("Fitur hapus log harus dikonfigurasi melalui Google Sheets script.")) return;
    };
+
 
    // =====================================================================
    // RENDER KOMPONEN UI
@@ -571,61 +512,21 @@ export default function App() {
 
                   <div className="flex items-center justify-center md:justify-end gap-3 md:gap-4 flex-1 w-full md:w-auto">
                      <div className="flex items-center gap-2 md:gap-4 bg-slate-950/40 p-1.5 md:p-3 rounded-full border border-white/5 shadow-inner backdrop-blur-md">
-                        {user ? (
+                        {isTrusted ? (
                            <>
-                              <div className="relative group shrink-0">
-                                 <div className="w-8 h-8 md:w-12 md:h-12 rounded-full bg-slate-900 border border-orange-500/30 flex items-center justify-center overflow-hidden shadow-2xl transition-all group-hover:border-orange-500 relative">
-                                    {profile.avatar_url ? (
-                                       <img src={profile.avatar_url} className="w-full h-full object-cover" />
-                                    ) : (
-                                       <User size={18} className="text-white/60" />
-                                    )}
-                                    <label className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 cursor-pointer transition-all rounded-full">
-                                       <Camera size={12} className="text-white" />
-                                       <input 
-                                          type="file" 
-                                          className="hidden" 
-                                          onChange={async (e) => {
-                                             const reader = new FileReader();
-                                             reader.onloadend = async () => {
-                                                await supabase.from('profiles').update({ avatar_url: reader.result }).eq('id', user.id);
-                                                setProfile({ ...profile, avatar_url: reader.result });
-                                                localStorage.setItem('caraka_user', JSON.stringify({ ...profile, avatar_url: reader.result }));
-                                             };
-                                             reader.readAsDataURL(e.target.files[0]);
-                                          }} 
-                                       />
-                                    </label>
-                                 </div>
-                              </div>
                               <div className="flex flex-col text-left pr-2 max-w-[100px] md:max-w-[150px] overflow-hidden">
                                  <span className="text-[10px] md:text-[11px] font-black text-white truncate">
-                                    {parseUserEmail(user.email).fullname}
+                                    Trusted Device
                                  </span>
                                  <span className="text-[7px] md:text-[8px] font-mono text-orange-500 uppercase tracking-widest">
-                                    {profile.role}
+                                    Administrator
                                  </span>
                               </div>
                               <div className="flex gap-1">
                                  <button 
-                                    onClick={() => {
-                                       const parsed = parseUserEmail(user.email);
-                                       setNewUsername(parsed.username); 
-                                       setNewFullname(parsed.fullname);
-                                       setAvatarBase64(profile.avatar_url || user.avatar_url);
-                                       setNewPassword(''); 
-                                       setConfirmPassword(''); 
-                                       setShowProfileModal(true);
-                                    }} 
-                                    className="p-2 md:p-3 bg-white/10 hover:bg-blue-600 text-white/80 hover:text-white rounded-full transition-all" 
-                                    title="Profile Settings"
-                                 >
-                                    <Settings size={14} />
-                                 </button>
-                                 <button 
                                     onClick={() => { 
-                                       clearSession(); 
-                                       window.location.reload(); 
+                                       clearTrustedDevice(); 
+                                       setIsTrusted(false);
                                     }} 
                                     className="p-2 md:p-3 bg-white/10 hover:bg-orange-600 text-white/80 hover:text-white rounded-full transition-all" 
                                     title="Logout"
@@ -639,7 +540,7 @@ export default function App() {
                               onClick={() => setShowLogin(true)} 
                               className="px-6 py-2.5 bg-gradient-to-r from-orange-600 to-orange-700 hover:from-orange-500 hover:to-orange-600 rounded-full font-black uppercase text-[9px] md:text-xs tracking-wider transition-all shadow-md flex items-center gap-2"
                            >
-                              <LogIn size={12} /> Login Gateway
+                              <LogIn size={12} /> Access Gateway
                            </button>
                         )}
                      </div>
@@ -817,7 +718,7 @@ export default function App() {
                
                {/* ----------------- KONTROL & DIAGNOSTIK ----------------- */}
                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 md:gap-10 items-stretch pb-20">
-                  <div className={`bg-black/30 backdrop-blur-[80px] p-6 md:p-8 rounded-[2.5rem] border border-white/10 shadow-none flex flex-col justify-between ${profile.role === 'pengunjung' ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
+                  <div className={`bg-black/30 backdrop-blur-[80px] p-6 md:p-8 rounded-[2.5rem] border border-white/10 shadow-none flex flex-col justify-between ${!isTrusted ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
                      <div>
                         {/* Sinkronisasi Parameter */}
                         <div className="mb-6">
@@ -960,7 +861,7 @@ export default function App() {
                                              {log.duration_seconds}S Pulse | {log.temperature}°C Baseline
                                           </span>
                                        </div>
-                                       {profile.role === 'admin' && (
+                                       {isTrusted && (
                                           <button 
                                              onClick={() => deleteLog(log.id)} 
                                              className="p-2.5 text-rose-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500/10 rounded-lg"
@@ -977,7 +878,7 @@ export default function App() {
                   </div>
 
                   {/* Panel Kanan (Hardware Stats & User Database) */}
-                  <div className={`bg-black/30 backdrop-blur-[80px] p-6 md:p-8 rounded-[2.5rem] border border-white/10 shadow-none flex flex-col gap-6 justify-between ${profile.role !== 'admin' ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
+                  <div className={`bg-black/30 backdrop-blur-[80px] p-6 md:p-8 rounded-[2.5rem] border border-white/10 shadow-none flex flex-col gap-6 justify-between ${!isTrusted ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
                      <div>
                         <div className="border-b border-white/5 pb-4">
                            <h3 className="text-[10px] md:text-[12px] font-black text-slate-300 uppercase tracking-widest flex items-center gap-3">
@@ -1103,53 +1004,6 @@ export default function App() {
                         </div>
                      </div>
                      
-                     {/* Database Tabel Pengguna (Admin Only) */}
-                     {profile.role === 'admin' && (
-                        <div className="mt-6 border-t border-white/5 pt-6">
-                           <h3 className="text-[10px] md:text-[12px] font-black text-white/60 uppercase tracking-widest flex items-center gap-3 mb-6">
-                              <Users size={18} className="text-blue-500" /> User Database
-                           </h3>
-                           <div className="overflow-y-auto max-h-[250px] pr-2 custom-scrollbar">
-                              <table className="w-full text-left text-[10px]">
-                                 <tbody>
-                                    {allUsers.map((u, i) => {
-                                       const parsed = parseUserEmail(u.email);
-                                       return (
-                                          <tr key={i} className="border-b border-white/5 last:border-0 hover:bg-white/20 transition-all group">
-                                             <td className="py-3 px-2 font-bold text-slate-200">
-                                                <div className="flex items-center gap-2.5">
-                                                   <div className="w-7 h-7 rounded-lg bg-slate-950 border border-white/20 overflow-hidden flex items-center justify-center shrink-0 shadow-lg">
-                                                      {u.avatar_url ? (
-                                                         <img src={u.avatar_url} className="w-full h-full object-cover" />
-                                                      ) : (
-                                                         <User size={12} className="text-slate-600" />
-                                                      )}
-                                                   </div>
-                                                   <div className="flex flex-col">
-                                                      <span className="font-black text-slate-100">{parsed.fullname}</span>
-                                                      <span className="text-[8px] text-white/60 font-mono">@{parsed.username}</span>
-                                                   </div>
-                                                </div>
-                                             </td>
-                                             <td className="py-3 px-2 uppercase font-black text-orange-500 text-center tracking-widest text-[9px]">
-                                                {u.role}
-                                             </td>
-                                             <td className="py-3 px-2 text-right">
-                                                <button 
-                                                   onClick={() => deleteUser(u.id)} 
-                                                   className="p-2 text-rose-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500/20 rounded-lg"
-                                                >
-                                                   <Trash2 size={14} />
-                                                </button>
-                                             </td>
-                                          </tr>
-                                       );
-                                    })}
-                                 </tbody>
-                              </table>
-                           </div>
-                        </div>
-                     )}
                   </div>
                </div>
             </div>
@@ -1158,344 +1012,48 @@ export default function App() {
             <AnimatePresence>
                {showLogin && (
                   <motion.div 
-                     initial={{ opacity: 0 }} 
-                     animate={{ opacity: 1 }} 
-                     exit={{ opacity: 0 }} 
+                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
                      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-3xl p-6"
                   >
                      <motion.div 
-                        initial={{ scale: 0.9 }} 
-                        animate={{ scale: 1 }} 
+                        initial={{ scale: 0.9 }} animate={{ scale: 1 }} 
                         className="bg-[#1e293b] p-8 md:p-12 rounded-[3.5rem] md:rounded-[4rem] w-full max-w-sm border border-white/20 shadow-2xl relative animate-fadeIn"
                      >
                         <button 
-                           onClick={() => { 
-                              setShowLogin(false); 
-                              setAuthMode('login'); 
-                              setUsername(''); 
-                              setFullname(''); 
-                              setPassword(''); 
-                              setSecretKey(''); 
-                           }} 
+                           onClick={() => { setShowLogin(false); setSecretKey(''); }} 
                            className="absolute top-8 right-8 text-white/60 hover:text-white"
                         >
                            <X />
                         </button>
                         
-                        <div className="flex bg-white/10 p-1.5 rounded-2xl border border-white/5 mb-8">
-                           <button 
-                              onClick={() => { setAuthMode('login'); setUsername(''); setFullname(''); setPassword(''); }} 
-                              className={`flex-1 py-3 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all ${authMode === 'login' ? 'bg-orange-600 text-white shadow-lg' : 'text-white/80 hover:text-white'}`}
-                           >
-                              Sign In
-                           </button>
-                           <button 
-                              onClick={() => { setAuthMode('register'); setUsername(''); setFullname(''); setPassword(''); }} 
-                              className={`flex-1 py-3 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all ${authMode === 'register' ? 'bg-orange-600 text-white shadow-lg' : 'text-white/80 hover:text-white'}`}
-                           >
-                              Register
-                           </button>
-                        </div>
-                        
                         <form 
-                           onSubmit={async (e) => {
+                           onSubmit={(e) => {
                               e.preventDefault();
-                              if (authMode === 'login') {
-                                 const { data: allProfiles, error } = await supabase.from('profiles').select('*');
-                                 if (error) { alert("Database connection failure!"); return; }
-                                 
-                                 const matched = allProfiles.find(u => parseUserEmail(u.email).username.toLowerCase() === username.trim().toLowerCase());
-                                 if (!matched) { alert("Username tidak ditemukan!"); return; }
-                                 
-                                 let isAuthenticated = false;
-                                 if (matched.password_hash) {
-                                    isAuthenticated = await verifyPassword(password, matched.password_hash);
-                                 } else if (matched.password && matched.password === password) {
-                                    isAuthenticated = true; 
-                                    const newHash = await hashPassword(password);
-                                    await supabase.from('profiles').update({ password_hash: newHash, password: null }).eq('id', matched.id);
-                                 }
-                                 
-                                 if (isAuthenticated) {
-                                    const parsed = parseUserEmail(matched.email);
-                                    const token = await createSessionToken({ 
-                                       id: matched.id, 
-                                       username: parsed.username, 
-                                       fullname: parsed.fullname, 
-                                       role: matched.role, 
-                                       avatar_url: matched.avatar_url 
-                                    });
-                                    saveSession(token); 
-                                    const remaining = await getSessionTimeRemaining(); 
-                                    setSessionMinutes(remaining);
-                                    setUser(matched); 
-                                    setProfile(matched); 
-                                    setShowLogin(false); 
-                                    setUsername(''); 
-                                    setPassword('');
-                                    if (matched.role === 'admin') fetchAllUsers();
-                                 } else { 
-                                    alert("Password salah! Periksa kembali Password Anda."); 
-                                 }
+                              if (loginTrustedDevice(secretKey)) {
+                                 setIsTrusted(true);
+                                 setShowLogin(false);
+                                 setSecretKey('');
                               } else {
-                                 const expectedKey = role === 'admin' ? import.meta.env.VITE_KEY_ADMIN : import.meta.env.VITE_KEY_ANGGOTA;
-                                 if (secretKey !== expectedKey) { alert("Kunci Rahasia yang Anda masukkan salah!"); return; }
-                                 if (password.length < 6) { alert("Pendaftaran Gagal: Password harus terdiri dari minimal 6 karakter."); return; }
-                                 
-                                 const { data: allProfiles } = await supabase.from('profiles').select('email');
-                                 const isTaken = allProfiles?.some(u => parseUserEmail(u.email).username.toLowerCase() === username.trim().toLowerCase());
-                                 if (isTaken) { alert("Username ini sudah terdaftar! Pilih username lain."); return; }
-                                 
-                                 const composite = formatUserEmail(username, fullname);
-                                 const hashedPw = await hashPassword(password);
-                                 const { error } = await supabase.from('profiles').insert([
-                                    { email: composite, password: null, password_hash: hashedPw, role, avatar_url: null }
-                                 ]);
-                                 
-                                 if (error) {
-                                    alert("Registrasi Gagal: " + error.message); 
-                                 } else { 
-                                    alert("Registrasi Berhasil! Silakan Masuk."); 
-                                    setAuthMode('login'); 
-                                    setUsername(''); 
-                                    setFullname(''); 
-                                    setPassword(''); 
-                                    setSecretKey(''); 
-                                 }
+                                 alert("Secret PIN Salah! Akses Ditolak.");
                               }
                            }} 
-                           className="space-y-4 text-center"
+                           className="space-y-4 text-center mt-4"
                         >
-                           <h2 className="text-xl md:text-2xl font-black uppercase text-white mb-4 tracking-tighter italic">
-                              ADIWIRA <span className="text-orange-500">{authMode === 'login' ? 'GATEWAY' : 'SIGN UP'}</span>
+                           <h2 className="text-xl md:text-2xl font-black uppercase text-white mb-8 tracking-tighter italic">
+                              ADIWIRA <span className="text-orange-500">GATEWAY</span>
                            </h2>
-                           
-                           {authMode === 'register' && (
-                              <input 
-                                 type="text" 
-                                 placeholder="Nama Lengkap" 
-                                 className="w-full bg-white/10 p-4 rounded-2xl text-white outline-none border border-white/20 shadow-inner text-xs focus:border-orange-500" 
-                                 value={fullname} 
-                                 onChange={e => setFullname(e.target.value)} 
-                                 required 
-                              />
-                           )}
-                           
-                           <input 
-                              type="text" 
-                              placeholder="Username" 
-                              className="w-full bg-white/10 p-4 rounded-2xl text-white outline-none border border-white/20 shadow-inner text-xs focus:border-orange-500" 
-                              value={username} 
-                              onChange={e => setUsername(e.target.value)} 
-                              required 
-                           />
                            
                            <input 
                               type="password" 
-                              placeholder="Password" 
-                              className="w-full bg-white/10 p-4 rounded-2xl text-white outline-none border border-white/20 shadow-inner text-xs focus:border-orange-500" 
-                              value={password} 
-                              onChange={e => setPassword(e.target.value)} 
+                              placeholder="Secret PIN" 
+                              className="w-full bg-white/10 p-4 rounded-2xl text-center font-bold text-white outline-none border border-white/20 shadow-inner text-sm focus:border-orange-500" 
+                              value={secretKey} 
+                              onChange={e => setSecretKey(e.target.value)} 
                               required 
                            />
                            
-                           {authMode === 'register' && (
-                              <div className="space-y-4 text-left animate-fadeIn">
-                                 <div className="space-y-2">
-                                    <label className="text-[8px] font-black text-white/60 uppercase tracking-widest ml-1">Access Level</label>
-                                    <div className="flex bg-slate-900/50 p-1.5 rounded-xl border border-white/5 gap-2">
-                                       <button 
-                                          type="button" 
-                                          onClick={() => setRole('anggota')} 
-                                          className={`flex-1 py-2 text-[8px] font-bold uppercase rounded-lg transition-all ${role === 'anggota' ? 'bg-blue-600/30 text-blue-400 border border-blue-500/20' : 'text-white/60'}`}
-                                       >
-                                          Anggota
-                                       </button>
-                                       <button 
-                                          type="button" 
-                                          onClick={() => setRole('admin')} 
-                                          className={`flex-1 py-2 text-[8px] font-bold uppercase rounded-lg transition-all ${role === 'admin' ? 'bg-orange-600/30 text-orange-400 border border-orange-500/20' : 'text-white/60'}`}
-                                       >
-                                          Admin
-                                       </button>
-                                    </div>
-                                 </div>
-                                 <div className="space-y-2">
-                                    <label className="text-[8px] font-black text-white/60 uppercase tracking-widest ml-1">Registration Key</label>
-                                    <input 
-                                       type="password" 
-                                       placeholder="Secret Key" 
-                                       className="w-full bg-white/10 p-4 rounded-2xl text-white outline-none border border-white/20 shadow-inner text-xs focus:border-orange-500" 
-                                       value={secretKey} 
-                                       onChange={e => setSecretKey(e.target.value)} 
-                                       required 
-                                    />
-                                 </div>
-                              </div>
-                           )}
-                           
-                           <button className="w-full py-4 bg-orange-600 hover:bg-orange-500 text-white font-black rounded-2xl shadow-xl uppercase tracking-[0.2em] transition-all hover:scale-[1.02]">
-                              {authMode === 'login' ? 'Authorize' : 'Register Account'}
-                           </button>
-                        </form>
-                     </motion.div>
-                  </motion.div>
-               )}
-            </AnimatePresence>
-
-            {/* ----------------- MODAL PROFIL SETTINGS ----------------- */}
-            <AnimatePresence>
-               {showProfileModal && user && (
-                  <motion.div 
-                     initial={{ opacity: 0 }} 
-                     animate={{ opacity: 1 }} 
-                     exit={{ opacity: 0 }} 
-                     className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-3xl p-6"
-                  >
-                     <motion.div 
-                        initial={{ scale: 0.9 }} 
-                        animate={{ scale: 1 }} 
-                        className="bg-[#1e293b] p-8 md:p-12 rounded-[3.5rem] md:rounded-[4rem] w-full max-w-sm border border-white/20 shadow-2xl relative animate-fadeIn"
-                     >
-                        <button 
-                           onClick={() => { 
-                              setShowProfileModal(false); 
-                              setNewPassword(''); 
-                              setConfirmPassword(''); 
-                           }} 
-                           className="absolute top-8 right-8 text-white/60 hover:text-white"
-                        >
-                           <X />
-                        </button>
-                        
-                        <form 
-                           onSubmit={async (e) => {
-                              e.preventDefault();
-                              if (newPassword && newPassword !== confirmPassword) { alert("Password baru dan konfirmasi tidak cocok!"); return; }
-                              if (!newUsername.trim() || !newFullname.trim()) { alert("Username dan Nama Lengkap tidak boleh kosong!"); return; }
-                              
-                              const currentParsed = parseUserEmail(user.email);
-                              if (newUsername.trim().toLowerCase() !== currentParsed.username.toLowerCase()) {
-                                 const { data: allProfiles } = await supabase.from('profiles').select('email');
-                                 const isTaken = allProfiles?.some(u => parseUserEmail(u.email).username.toLowerCase() === newUsername.trim().toLowerCase());
-                                 if (isTaken) { alert("Username baru ini sudah terdaftar! Gunakan yang lain."); return; }
-                              }
-                              
-                              const composite = formatUserEmail(newUsername, newFullname);
-                              const updateData = { email: composite, avatar_url: avatarBase64 };
-                              
-                              if (newPassword) {
-                                 if (newPassword.length < 6) { alert("Password baru harus terdiri dari minimal 6 karakter."); return; }
-                                 updateData.password_hash = await hashPassword(newPassword); 
-                                 updateData.password = null;
-                              }
-                              
-                              const { error } = await supabase.from('profiles').update(updateData).eq('id', user.id);
-                              
-                              if (error) {
-                                 alert("Gagal memperbarui profil: " + error.message); 
-                              } else {
-                                 alert("Setelan Profil berhasil diperbarui!");
-                                 const updatedUser = { ...user, email: composite, avatar_url: avatarBase64 };
-                                 setUser(updatedUser); 
-                                 setProfile(updatedUser);
-                                 
-                                 const parsed = parseUserEmail(composite);
-                                 const newToken = await createSessionToken({ 
-                                    id: user.id, 
-                                    username: parsed.username, 
-                                    fullname: parsed.fullname, 
-                                    role: user.role, 
-                                    avatar_url: avatarBase64 
-                                 });
-                                 saveSession(newToken); 
-                                 setShowProfileModal(false); 
-                                 setNewPassword(''); 
-                                 setConfirmPassword('');
-                                 if (profile.role === 'admin') fetchAllUsers();
-                              }
-                           }} 
-                           className="space-y-6 text-center"
-                        >
-                           <h2 className="text-xl md:text-2xl font-black uppercase text-white mb-4 tracking-tighter italic">
-                              PROFILE <span className="text-blue-400">SETTINGS</span>
-                           </h2>
-                           
-                           <div className="flex flex-col items-center gap-3">
-                              <div className="relative group w-24 h-24 rounded-[2rem] bg-slate-900 border border-white/20 flex items-center justify-center overflow-hidden shadow-2xl transition-all hover:border-blue-500/40">
-                                 {avatarBase64 ? (
-                                    <img src={avatarBase64} className="w-full h-full object-cover" />
-                                 ) : (
-                                    <User size={36} className="text-slate-700" />
-                                 )}
-                                 <label className="absolute inset-0 flex items-center justify-center bg-black/70 opacity-0 group-hover:opacity-100 cursor-pointer transition-all">
-                                    <Camera size={22} className="text-white" />
-                                    <input 
-                                       type="file" 
-                                       accept="image/*" 
-                                       className="hidden" 
-                                       onChange={(e) => {
-                                          if (e.target.files[0]) {
-                                             const reader = new FileReader(); 
-                                             reader.onloadend = () => setAvatarBase64(reader.result); 
-                                             reader.readAsDataURL(e.target.files[0]);
-                                          }
-                                       }} 
-                                    />
-                                 </label>
-                              </div>
-                              <span className="text-[7px] font-black uppercase text-white/60 tracking-wider">
-                                 Tap to Change Avatar
-                              </span>
-                           </div>
-                           
-                           <div className="space-y-3 text-left">
-                              <div className="space-y-1.5">
-                                 <label className="text-[8px] font-black text-white/60 uppercase tracking-widest ml-1">Nama Lengkap</label>
-                                 <input 
-                                    type="text" 
-                                    className="w-full bg-white/10 p-3.5 rounded-xl text-white outline-none border border-white/20 shadow-inner text-xs focus:border-blue-500" 
-                                    value={newFullname} 
-                                    onChange={e => setNewFullname(e.target.value)} 
-                                    required 
-                                 />
-                              </div>
-                              <div className="space-y-1.5">
-                                 <label className="text-[8px] font-black text-white/60 uppercase tracking-widest ml-1">Username</label>
-                                 <input 
-                                    type="text" 
-                                    className="w-full bg-white/10 p-3.5 rounded-xl text-white outline-none border border-white/20 shadow-inner text-xs focus:border-blue-500 font-mono" 
-                                    value={newUsername} 
-                                    onChange={e => setNewUsername(e.target.value)} 
-                                    required 
-                                 />
-                              </div>
-                              <div className="space-y-1.5">
-                                 <label className="text-[8px] font-black text-white/60 uppercase tracking-widest ml-1">New Password (Optional)</label>
-                                 <input 
-                                    type="password" 
-                                    placeholder="Biarkan kosong jika tidak diubah" 
-                                    className="w-full bg-white/10 p-3.5 rounded-xl text-white outline-none border border-white/20 shadow-inner text-xs focus:border-blue-500" 
-                                    value={newPassword} 
-                                    onChange={e => setNewPassword(e.target.value)} 
-                                 />
-                              </div>
-                              {newPassword && (
-                                 <div className="space-y-1.5 animate-fadeIn">
-                                    <label className="text-[8px] font-black text-white/60 uppercase tracking-widest ml-1">Confirm New Password</label>
-                                    <input 
-                                       type="password" 
-                                       placeholder="Ulangi password baru" 
-                                       className="w-full bg-white/10 p-3.5 rounded-xl text-white outline-none border border-white/20 shadow-inner text-xs focus:border-blue-500" 
-                                       value={confirmPassword} 
-                                       onChange={e => setConfirmPassword(e.target.value)} 
-                                       required 
-                                    />
-                                 </div>
-                              )}
-                           </div>
-                           <button className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl shadow-xl uppercase tracking-[0.2em] transition-all hover:scale-[1.02] mt-4">
-                              Save Changes
+                           <button className="w-full py-4 mt-4 bg-orange-600 hover:bg-orange-500 text-white font-black rounded-2xl shadow-xl uppercase tracking-[0.2em] transition-all hover:scale-[1.02]">
+                              Authorize
                            </button>
                         </form>
                      </motion.div>
