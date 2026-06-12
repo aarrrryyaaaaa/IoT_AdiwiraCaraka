@@ -256,6 +256,7 @@ export default function App() {
    // Referensi untuk Logic Pompa
    const lastRelayState = React.useRef(false);
    const wateringStartTime = React.useRef(null);
+   const wateringStartTemp = React.useRef(0);
    const isTestingPump = React.useRef(false);
    
    // Leader Election Referensi
@@ -344,17 +345,19 @@ export default function App() {
                // 1. DETEKSI MULAI (ON)
                if (lastRelayState.current === false && isRelayOn === true) {
                   wateringStartTime.current = new Date();
+                  wateringStartTemp.current = data.temp || 0;
                } 
                // 2. DETEKSI SELESAI (OFF)
                else if (lastRelayState.current === true && isRelayOn === false) {
                   if (wateringStartTime.current) {
                      // --- FIX ATOMIC: AMBIL DATA LALU HAPUS VARIABEL SEGERA ---
                      const startTime = wateringStartTime.current;
+                     const startTemp = wateringStartTemp.current;
                      wateringStartTime.current = null; // DIHAPUS SEBELUM PROSES APAPUN
                      
                      if (!isTestingPump.current) {
                         const durationSeconds = Math.round((new Date() - startTime) / 1000);
-                        const baseTemp = data.temp || 0;
+                        const baseTemp = startTemp;
 
                         // --- MQTT LEADER ELECTION ---
                         // Memasukkan log ke state antrean
