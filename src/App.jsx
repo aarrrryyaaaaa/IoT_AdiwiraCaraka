@@ -459,8 +459,21 @@ export default function App() {
    }, []);
 
    // Fungsi Hapus Log
-   const deleteLog = async (id) => {
-      if (!confirm("Fitur hapus log harus dikonfigurasi melalui Google Sheets script.")) return;
+   const deleteLog = async (timestamp) => {
+      if (!confirm("Hapus log penyiraman ini?")) return;
+      const scriptUrl = import.meta.env.VITE_GOOGLE_SHEETS_API_URL;
+      if (!scriptUrl) return;
+      try {
+         await fetch(scriptUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: "delete", timestamp })
+         });
+         setWateringLogs(prev => prev.filter(log => log.start_time !== timestamp));
+      } catch (e) {
+         console.error("Gagal menghapus log:", e);
+      }
    };
 
 
@@ -866,7 +879,7 @@ export default function App() {
                                        </div>
                                        {isTrusted && (
                                           <button 
-                                             onClick={() => deleteLog(log.id)} 
+                                             onClick={() => deleteLog(log.start_time)} 
                                              className="p-2.5 text-rose-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500/10 rounded-lg"
                                           >
                                              <Trash2 size={14} />
