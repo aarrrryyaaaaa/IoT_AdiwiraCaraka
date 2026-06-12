@@ -685,49 +685,79 @@ export default function App() {
                      </h3>
                      <div className="h-[170px] md:h-[250px]">
                         <Line 
-                           data={{ 
-                              labels: history.labels, 
-                              datasets: [
-                                 { 
-                                    label: 'Suhu (°C)', 
-                                    data: history.temp, 
-                                    borderColor: '#f97316', 
-                                    backgroundColor: 'rgba(249, 115, 22, 0.05)', 
-                                    fill: true, 
-                                    tension: 0.4, 
-                                    pointRadius: 0, 
-                                    borderWidth: 3 
-                                 },
-                                 { 
-                                    label: 'Kelembapan (%)', 
-                                    data: history.hum, 
-                                    borderColor: '#3b82f6', 
-                                    backgroundColor: 'rgba(59, 130, 246, 0.05)', 
-                                    fill: true, 
-                                    tension: 0.4, 
-                                    pointRadius: 0, 
-                                    borderWidth: 3 
-                                 }
-                              ] 
-                           }} 
-                           options={{ 
-                              responsive: true, 
-                              maintainAspectRatio: false, 
-                              plugins: { 
-                                 legend: { 
-                                    display: true, 
-                                    labels: { color: 'rgba(255,255,255,0.7)', font: { size: 10 } } 
-                                 } 
-                              }, 
-                              scales: { 
-                                 x: { display: false }, 
-                                 y: { 
-                                    grid: { color: 'rgba(255,255,255,0.03)' }, 
-                                    ticks: { color: '#475569', font: { size: 10 } } 
-                                 } 
-                              } 
-                           }} 
-                        />
+                            data={{ 
+                               labels: history.labels, 
+                               datasets: [
+                                  { 
+                                     label: 'Suhu (°C)', 
+                                     data: history.temp, 
+                                     borderColor: '#f97316', 
+                                     backgroundColor: 'rgba(249, 115, 22, 0.05)', 
+                                     fill: true, 
+                                     tension: 0.4, 
+                                     pointRadius: 0, 
+                                     pointHoverRadius: 6,
+                                     borderWidth: 3,
+                                     yAxisID: 'y'
+                                  },
+                                  { 
+                                     label: 'Kelembapan (%)', 
+                                     data: history.hum, 
+                                     borderColor: '#3b82f6', 
+                                     backgroundColor: 'rgba(59, 130, 246, 0.05)', 
+                                     fill: true, 
+                                     tension: 0.4, 
+                                     pointRadius: 0, 
+                                     pointHoverRadius: 6,
+                                     borderWidth: 3,
+                                     yAxisID: 'y1'
+                                  }
+                               ] 
+                            }} 
+                            options={{ 
+                               responsive: true, 
+                               maintainAspectRatio: false, 
+                               interaction: {
+                                  mode: 'index',
+                                  intersect: false,
+                               },
+                               plugins: { 
+                                  legend: { 
+                                     display: true, 
+                                     labels: { color: 'rgba(255,255,255,0.7)', font: { size: 10 } } 
+                                  },
+                                  tooltip: {
+                                     backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                                     titleColor: '#fff',
+                                     bodyColor: '#cbd5e1',
+                                     borderColor: 'rgba(255,255,255,0.1)',
+                                     borderWidth: 1,
+                                     padding: 10
+                                  }
+                               }, 
+                               scales: { 
+                                  x: { 
+                                     display: true, 
+                                     grid: { display: false },
+                                     ticks: { color: 'rgba(255,255,255,0.4)', maxTicksLimit: 6 }
+                                  }, 
+                                  y: { 
+                                     type: 'linear',
+                                     display: true,
+                                     position: 'left',
+                                     grid: { color: 'rgba(255,255,255,0.03)' }, 
+                                     ticks: { color: '#f97316', font: { size: 10 } } 
+                                  },
+                                  y1: {
+                                     type: 'linear',
+                                     display: true,
+                                     position: 'right',
+                                     grid: { drawOnChartArea: false }, 
+                                     ticks: { color: '#3b82f6', font: { size: 10 } } 
+                                  }
+                               } 
+                            }} 
+                         />
                      </div>
                   </div>
                </div>
