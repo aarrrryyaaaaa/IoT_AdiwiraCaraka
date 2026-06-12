@@ -350,67 +350,10 @@ export default function App() {
                // 2. DETEKSI SELESAI (OFF)
                else if (lastRelayState.current === true && isRelayOn === false) {
                   if (wateringStartTime.current) {
-                     // --- FIX ATOMIC: AMBIL DATA LALU HAPUS VARIABEL SEGERA ---
-                     const startTime = wateringStartTime.current;
-                     const startTemp = wateringStartTemp.current;
-                     wateringStartTime.current = null; // DIHAPUS SEBELUM PROSES APAPUN
-                     
-                     if (!isTestingPump.current) {
-                        const durationSeconds = Math.round((new Date() - startTime) / 1000);
-                        const baseTemp = startTemp;
-
-                        // --- MQTT LEADER ELECTION ---
-                        // Memasukkan log ke state antrean
-                        pendingLogRef.current = {
-                           active: true,
-                           startTime: startTime,
-                           duration: durationSeconds,
-                           temp: baseTemp
-                        };
-                        
-                        // Teriak ke semua browser yang sedang terbuka
-                        if (mqttClientRef.current) {
-                           mqttClientRef.current.publish('adiwira/v3/react_sync', JSON.stringify({
-                              action: 'claim_log',
-                              id: syncClientId.current,
-                              ts: Date.now()
-                           }));
-                        }
-
-                        // Beri waktu 3 detik bagi semua browser untuk berdebat siapa Leadernya
-                        setTimeout(async () => {
-                           if (pendingLogRef.current && pendingLogRef.current.active) {
-                              
-                              // --- DOUBLE SAFETY: ANTI-FLAPPING ---
-                              const nowMs = Date.now();
-                              const lastMs = parseInt(localStorage.getItem('last_log_ms') || '0', 10);
-                              if (Math.abs(nowMs - lastMs) < 30000) {
-                                 console.log("♻️ [Safety Lock] Log penyiraman dalam 30 detik terakhir sudah ada. Membatalkan insert.");
-                                 pendingLogRef.current = null;
-                                 return;
-                              }
-                              localStorage.setItem('last_log_ms', nowMs.toString());
-                              
-                              console.log("🏆 Leader Election dimenangkan oleh browser ini. Mengirim data ke Google Sheets API...");
-                              const scriptUrl = import.meta.env.VITE_GOOGLE_SHEETS_API_URL;
-                              if (scriptUrl) {
-                                 fetch(scriptUrl, {
-                                    method: 'POST',
-                                    mode: 'no-cors',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                       start_time: pendingLogRef.current.startTime.toISOString(),
-                                       duration_seconds: pendingLogRef.current.duration,
-                                       temperature: pendingLogRef.current.temp
-                                    })
-                                 }).then(() => { setTimeout(fetchLogs, 2000); }).catch(e => console.error(e));
-                              }
-                           } else {
-                              console.log("♻️ Browser lain menjadi Leader. Membatalkan log duplikat...");
-                           }
-                           pendingLogRef.current = null;
-                        }, 3000);
-                     }
+                     wateringStartTime.current = null;
+                     wateringStartTemp.current = 0;
+                     // Pencatatan Google Sheets sekarang dikendalikan SEPENUHNYA oleh hardware ESP32
+                     setTimeout(fetchLogs, 2500); // Sinkronisasi UI setelah ESP32 selesai mencatat
                   }
                }
                
